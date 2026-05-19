@@ -3,7 +3,6 @@
 __pycache__/
 *.pyc
 data/fresh_cache/
-data/email_country.json
 output/
 .planning/
 .DS_Store

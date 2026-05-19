@@ -48,34 +48,11 @@ ticket_file = st.file_uploader(
     type=["xlsx", "csv"],
 )
 
-# Optional country-lookup uploader. The bundled data/email_country.json may be
-# absent on a hosted deploy (it contains driver PII so isn't committed). When
-# absent, Amy uploads it here and the file is cached in session_state for the
-# rest of the browser session.
-bundled_lookup_present = (ROOT / "data" / "email_country.json").exists()
-with st.expander("Country lookup" + (" (optional override)" if bundled_lookup_present else " (required)"), expanded=not bundled_lookup_present):
-    if bundled_lookup_present:
-        st.caption("A bundled lookup is loaded. Upload one to override or add markets.")
-    else:
-        st.caption("Bundled lookup not found — upload the email→country file (xlsx/csv) Jay maintains.")
-    lookup_file = st.file_uploader(
-        "Country lookup (xlsx or csv)",
-        type=["xlsx", "csv"],
-        key="lookup_uploader",
-    )
-    if lookup_file is not None:
-        st.session_state["lookup_bytes"] = lookup_file.getvalue()
-        st.session_state["lookup_name"] = lookup_file.name
-    if st.session_state.get("lookup_name"):
-        st.success(f"Cached lookup: **{st.session_state['lookup_name']}**")
-
-create_disabled = ticket_file is None or (not bundled_lookup_present and not st.session_state.get("lookup_name"))
-
 create = st.button(
     "Create report",
     type="primary",
     use_container_width=True,
-    disabled=create_disabled,
+    disabled=ticket_file is None,
 )
 
 if create:
@@ -83,12 +60,6 @@ if create:
 
     in_path = workdir / ticket_file.name
     in_path.write_bytes(ticket_file.getvalue())
-
-    extra_country_files: list[Path] = []
-    if st.session_state.get("lookup_bytes"):
-        lookup_path = workdir / st.session_state["lookup_name"]
-        lookup_path.write_bytes(st.session_state["lookup_bytes"])
-        extra_country_files.append(lookup_path)
 
     with st.status("Building report…", expanded=True) as status_box:
         st.write(f"Input: `{in_path.name}`")
@@ -117,7 +88,6 @@ if create:
                 in_path,
                 month,
                 out_path,
-                extra_country_files=extra_country_files or None,
                 progress_cb=progress_cb,
             )
         except Exception as e:
