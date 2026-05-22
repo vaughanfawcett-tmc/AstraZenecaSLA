@@ -44,7 +44,7 @@ st.title("AstraZeneca SLA Report")
 st.caption("Upload the Freshdesk export and click Create report. That's it.")
 
 ticket_file = st.file_uploader(
-    "Freshdesk ticket export (xlsx or csv)",
+    "Freshdesk ticket export (xlsx, xls, or csv)",
 )
 
 create = st.button(

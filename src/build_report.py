@@ -113,6 +113,74 @@ def _load_extra_country_file(path: Path) -> dict[str, str]:
     return out
 
 
+def _read_spreadsheetml(path: Path):
+    """Parse Excel 2003 SpreadsheetML XML (Freshdesk exports .xls files in this format)."""
+    import xml.etree.ElementTree as ET
+    SS = "urn:schemas-microsoft-com:office:spreadsheet"
+    tree = ET.parse(str(path))
+    root = tree.getroot()
+    ws = root.find(f".//{{{SS}}}Worksheet")
+    if ws is None:
+        raise ValueError(f"No Worksheet found in SpreadsheetML file: {path}")
+    table = ws.find(f"{{{SS}}}Table")
+    if table is None:
+        raise ValueError(f"No Table found in SpreadsheetML file: {path}")
+
+    rows_out = []
+    for row_el in table.findall(f"{{{SS}}}Row"):
+        cells: dict[int, object] = {}
+        col_idx = 0
+        for cell_el in row_el.findall(f"{{{SS}}}Cell"):
+            idx_attr = cell_el.get(f"{{{SS}}}Index")
+            if idx_attr is not None:
+                col_idx = int(idx_attr) - 1
+            data_el = cell_el.find(f"{{{SS}}}Data")
+            if data_el is not None:
+                dtype = data_el.get(f"{{{SS}}}Type", "String")
+                val = data_el.text
+                if val is None:
+                    cell_val = None
+                elif dtype == "Number":
+                    try:
+                        fv = float(val)
+                        cell_val = int(fv) if fv == int(fv) else fv
+                    except (ValueError, OverflowError):
+                        cell_val = val
+                elif dtype == "DateTime":
+                    cell_val = _parse_csv_datetime(val)
+                else:
+                    cell_val = val or None
+            else:
+                cell_val = None
+            cells[col_idx] = cell_val
+            col_idx += 1
+        if not cells:
+            continue
+        max_col = max(cells.keys()) + 1
+        rows_out.append(tuple(cells.get(i) for i in range(max_col)))
+
+    if not rows_out:
+        raise ValueError(f"SpreadsheetML file is empty: {path}")
+    n_cols = len(rows_out[0])
+    padded = [r + (None,) * (n_cols - len(r)) for r in rows_out]
+    headers = list(padded[0])
+    # Dates come through as strings — run them through the datetime parser
+    created_idx = next(
+        (i for i, h in enumerate(headers) if (h or "").strip().lower() == "created time"),
+        None,
+    )
+    if created_idx is not None:
+        def _fix_dates(rows):
+            for raw in rows:
+                if created_idx < len(raw) and not isinstance(raw[created_idx], datetime):
+                    raw = list(raw)
+                    raw[created_idx] = _parse_csv_datetime(raw[created_idx])
+                    raw = tuple(raw)
+                yield raw
+        return headers, _fix_dates(iter(padded[1:]))
+    return headers, iter(padded[1:])
+
+
 def _open_ticket_export(path: Path):
     """Return (headers, row_iterator) for an xlsx or csv ticket export.
 
@@ -140,6 +208,32 @@ def _open_ticket_export(path: Path):
                 yield raw
 
         return headers, _xlsx_row_iter()
+
+    if suffix == ".xls":
+        # Freshdesk exports SpreadsheetML XML with a .xls extension.
+        # Detect by file signature and route accordingly.
+        with path.open("rb") as _f:
+            _sig = _f.read(6)
+        if _sig.startswith(b"<?xml") or _sig.startswith(b"\xef\xbb\xbf<"):
+            return _read_spreadsheetml(path)
+        # Genuine binary BIFF .xls
+        import xlrd
+        xwb = xlrd.open_workbook(str(path))
+        sheet_names = xwb.sheet_names()
+        xws = xwb.sheet_by_name("Sheet1") if "Sheet1" in sheet_names else xwb.sheet_by_index(0)
+
+        def _xls_cell(cell):
+            if cell.ctype == xlrd.XL_CELL_DATE:
+                return xlrd.xldate_as_datetime(cell.value, xwb.datemode)
+            if cell.ctype == xlrd.XL_CELL_EMPTY:
+                return None
+            return cell.value or None
+
+        all_rows = [tuple(_xls_cell(c) for c in xws.row(i)) for i in range(xws.nrows)]
+        if not all_rows:
+            raise ValueError(f"XLS file is empty: {path}")
+        headers = list(all_rows[0])
+        return headers, iter(all_rows[1:])
 
     if suffix == ".csv":
         import csv, io
@@ -179,7 +273,7 @@ def _open_ticket_export(path: Path):
 
         return headers, _row_iter()
 
-    raise ValueError(f"Unsupported ticket export format: {path.suffix}")
+    raise ValueError(f"Unsupported ticket export format: {path.suffix!r} — expected .xlsx, .xls, or .csv")
 
 
 def _parse_csv_datetime(s):
