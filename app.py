@@ -24,8 +24,6 @@ st.set_page_config(page_title="AstraZeneca SLA Report", layout="centered")
 
 
 # --- Password gate ----------------------------------------------------------
-# Only enforced when APP_PASSWORD is set in the environment (e.g. on Render).
-# Local runs without the env var skip the gate so dev/test stays one-click.
 APP_PASSWORD = os.environ.get("APP_PASSWORD", "")
 if APP_PASSWORD:
     if not st.session_state.get("_authed"):
@@ -46,6 +44,14 @@ st.caption("Upload the Freshdesk export and click Create report. That's it.")
 ticket_file = st.file_uploader(
     "Freshdesk ticket export (xlsx, xls, or csv)",
 )
+
+# Clear cached report when a different file is uploaded
+uploaded_name = ticket_file.name if ticket_file else None
+if uploaded_name != st.session_state.get("_last_upload"):
+    st.session_state.pop("_report_bytes", None)
+    st.session_state.pop("_report_name", None)
+    st.session_state.pop("_report_stats", None)
+    st.session_state["_last_upload"] = uploaded_name
 
 create = st.button(
     "Create report",
@@ -108,10 +114,18 @@ if create:
                 f"{len(stats['unknown_emails'])} email(s) had no country mapping — reported as 'Other'."
             )
 
+    # Store report in session state so it survives the rerun triggered by
+    # clicking the download button.
+    st.session_state["_report_bytes"] = out_path.read_bytes()
+    st.session_state["_report_name"] = out_path.name
+    st.session_state["_report_stats"] = stats
+
+# Show download button whenever a completed report is in session state.
+if "_report_bytes" in st.session_state:
     st.download_button(
-        label=f"Download {out_path.name}",
-        data=out_path.read_bytes(),
-        file_name=out_path.name,
+        label=f"Download {st.session_state['_report_name']}",
+        data=st.session_state["_report_bytes"],
+        file_name=st.session_state["_report_name"],
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         type="primary",
         use_container_width=True,
