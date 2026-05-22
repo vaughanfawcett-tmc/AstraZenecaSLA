@@ -45,7 +45,6 @@ st.caption("Upload the Freshdesk export and click Create report. That's it.")
 
 ticket_file = st.file_uploader(
     "Freshdesk ticket export (xlsx or csv)",
-    type=["xlsx", "csv"],
 )
 
 create = st.button(
